@@ -1,0 +1,105 @@
+#startButton {
+  display: inline;
+}
+#stopButton {
+  display: none;
+}
+#confirmDel {
+  display: none;
+}
+#prepPanel {
+  display: none;
+}
+#confirmWiFiDel {
+  display: none;
+}
+#confirmErase {
+  display: none;
+}
+#confirmLogDel {
+  display: none;
+}
+
+#scheduleTable {
+  font-family: Arial, Helvetica, sans-serif;
+  border-collapse: collapse;
+  width: 100%;
+}
+#scheduleTable td,
+#scheduleTable th {
+  border: 1px solid #ddd;
+  padding: 3px;
+}
+#scheduleTable tr:nth-child(even) {
+  background-color: #f2f2f2;
+}
+#scheduleTable tr:hover {
+  background-color: #ddd;
+}
+#scheduleTable th {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 6px;
+  text-align: left;
+  background-color: #198754;
+  color: white;
+}
+
+#sysInfoTable {
+  font-family: Arial, Helvetica, sans-serif;
+  border-collapse: collapse;
+  width: 100%;
+}
+#sysInfoTable td,
+#sysInfoTable th {
+  border: 1px solid #ddd;
+  padding: 3px;
+}
+#sysInfoTable tr:nth-child(even) {
+  background-color: #f2f2f2;
+}
+#sysInfoTable tr:hover {
+  background-color: #ddd;
+}
+#sysInfoTable th {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 6px;
+  text-align: left;
+  background-color: #198754;
+  color: white;
+}
+#sysInfoTable td {
+  text-align: left;
+  padding-left: 6px;
+}
+
+#logsTable {
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: small;
+  border-collapse: collapse;
+  width: 100%;
+}
+#logsTable td,
+#logsTable th {
+  border: 1px solid #ddd;
+  padding: 3px;
+}
+#logsTable tr:nth-child(even) {
+  background-color: #f2f2f2;
+}
+#logsTable tr:hover {
+  background-color: #ddd;
+}
+#logsTable th {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  padding-left: 6px;
+  text-align: left;
+  background-color: #198754;
+  color: white;
+}
+#logsTable td {
+  text-align: left;
+  padding-left: 6px;
+}

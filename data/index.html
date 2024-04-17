@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Hollow Clock - Configure</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" type="text/css" href="style.css" />
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH"
+      crossorigin="anonymous"
+    />
+  </head>
+  <body>
+    <div class="text-center bg-dark text-light p-2">
+      <h2>Hollow Clock Management</h2>
+      <h6 id="clockName">%CLOCKNAME%</h6>
+    </div>
+    <p></p>
+    <!-- Configuration HTML -->
+    <div class="container">
+      <!-- navigation list -->
+      <ul class="nav justify-content-center nav-pills" id="ex1" role="tablist">
+        <li class="nav-item" role="presentation">
+          <a
+            class="nav-link active"
+            id="pill-tab-0"
+            data-bs-toggle="pill"
+            href="#clockStatus"
+            role="tab"
+            aria-controls="clockStatus"
+            aria-selected="true"
+            >Clock Status</a
+          >
+        </li>
+        <li class="nav-item" role="presentation">
+          <a
+            class="nav-link"
+            id="pill-tab-1"
+            data-bs-toggle="pill"
+            href="#lighting"
+            role="tab"
+            aria-controls="lighting"
+            aria-selected="false"
+            >Lighting</a
+          >
+        </li>
+        <li class="nav-item" role="presentation">
+          <a
+            class="nav-link"
+            id="pill-tab-2"
+            data-bs-toggle="pill"
+            href="#stepsHour"
+            role="tab"
+            aria-controls="stepsHour"
+            aria-selected="false"
+            >Steps/Hour</a
+          >
+        </li>
+        <li class="nav-item" role="presentation">
+          <a
+            class="nav-link"
+            id="pill-tab-3"
+            data-bs-toggle="pill"
+            href="#timeZone"
+            role="tab"
+            aria-controls="timeZone"
+            aria-selected="false"
+            >Time Zone</a
+          >
+        </li>
+        <li class="nav-item" role="presentation">
+          <a
+            class="nav-link"
+            id="pill-tab-4"
+            data-bs-toggle="pill"
+            href="#logs"
+            role="tab"
+            aria-controls="logs"
+            aria-selected="false"
+            >Logs</a
+          >
+        </li>
+        <li class="nav-item" role="presentation">
+          <a
+            class="nav-link"
+            id="pill-tab-4"
+            data-bs-toggle="pill"
+            href="#sysinfo"
+            role="tab"
+            aria-controls="sysinfo"
+            aria-selected="false"
+            >Sys Info</a
+          >
+        </li>
+      </ul>
+      <div class="tab-content py-3 mt-2">
+        <!-- Clock Status -->
+        <div
+          class="tab-pane show active fade in"
+          id="clockStatus"
+          role="tabpanel"
+          aria-labelledby="pill-tab-0"
+        >
+          <div class="text-center">
+            <h3>Clock Status</h3>
+            <p>
+              Local time is:
+              <label id="localTime" , name="localTime">%LOCALTIME%</label
+              >&nbsp;&nbsp;
+              <button
+                type="button"
+                class="btn btn-info btn-sm"
+                onclick="configure('refreshTime')"
+              >
+                Refresh
+              </button>
+            </p>
+            <label for="clockTime">Observed Clock time is:</label>
+            <input
+              id="clockTime"
+              name="clockTime"
+              value="00:00"
+              type="time"
+              min="00:00"
+              max="11:59"
+            />
+            <p>Set the clock by adjusting the Observed Clock Time above.</p>
+            <p>
+              <button class="btn btn-success" onclick="configure('setClock')">
+                Set Clock
+              </button>
+            </p>
+            <p>
+              Microstep:<br />
+              <button class="btn btn-info btn-sm" onclick="configure('ccw')">
+                Counter</button
+              >&nbsp;&nbsp;
+              <button class="btn btn-info btn-sm" onclick="configure('cw')">
+                Clockwise
+              </button>
+            </p>
+          </div>
+        </div>
+        <!-- Lighting -->
+        <div
+          class="tab-pane fade"
+          id="lighting"
+          role="tabpanel"
+          aria-labelledby="pill-tab-1"
+        >
+          <div class="text-center">
+            <h3>Change Lighting</h3>
+
+            <label>Color:</label>
+            <select id="color" name="color">
+              %COLORSELECT%
+            </select>
+            <label>Level:</label>
+            <select id="level" name="level">
+              %LEVELSELECT%</select
+            ><br /><br />
+            <button class="btn btn-success" onclick="configure('lighting')">
+              Set Lighting
+            </button>
+            <br />
+            <hr />
+            <h3>Schedule Light Transitions</h3>
+            <label for="clockTime">Select a transition time </label>
+            <input
+              id="schedTime"
+              name="schedTime"
+              value="00:00"
+              type="time"
+            /><br />
+            <label>and lighting selection (above)</label><br /><br />
+            <button class="btn btn-success" onclick="addSched()">
+              Add to Schedule
+            </button>
+            <br />
+            <br />
+            <p id="schedTable" style="text-align: left; font-size: medium">
+              %SCHEDULEDISPLAY%
+            </p>
+          </div>
+        </div>
+        <!-- Steps/Hour -->
+        <div
+          class="tab-pane fade"
+          id="stepsHour"
+          role="tabpanel"
+          aria-labelledby="pill-tab-2"
+        >
+          <div class="text-center">
+            <h3>Configure Steps/Hour</h3>
+
+            <div class="text-left">
+              <p>
+                This will test the number of motor steps for the clock to travel
+                one hour. This is important for time accuracy. Test until the
+                minute hand starts and stops in the exact same place. Before
+                starting the test, try to microstep backward and then forward to
+                compensate for gear backlash.
+              </p>
+            </div>
+            <p>
+              <label for="steps_hour">Steps/Hour</label>
+              <input
+                type="text"
+                id="steps_hour"
+                name="steps_hour"
+                value="%STEPSPERHOUR%"
+              />
+            </p>
+            <p></p>
+
+            <label for="cycles">Cycles</label>
+            <input type="text" id="cycles" name="cycles" value="%CYCLES%" />
+            <p></p>
+
+            <button
+              class="btn btn-success"
+              id="prepButton"
+              name="prepButton"
+              onclick="configure('startPrep')"
+            >
+              Prepare Test
+            </button>
+            <div id="prepPanel">
+              <button
+                class="btn btn-success"
+                id="startButton"
+                name="startButton"
+                onclick="configure('startTest')"
+              >
+                Start Test
+              </button>
+              <button
+                class="btn btn-danger"
+                id="stopButton"
+                name="stopButton"
+                onclick="configure('stopTest')"
+              >
+                Stop Test
+              </button>
+              <br />
+              <label id="cycleCount" name="cycleCount"></label>
+              <br />
+              <p>
+                Microstep:<br />
+                <button class="btn btn-info btn-sm" onclick="configure('ccw')">
+                  Counter</button
+                >&nbsp;&nbsp;
+                <button class="btn btn-info btn-sm" onclick="configure('cw')">
+                  Clockwise
+                </button>
+              </p>
+            </div>
+            <br />
+          </div>
+        </div>
+        <!-- Time Zone -->
+        <div
+          class="tab-pane fade"
+          id="timeZone"
+          role="tabpanel"
+          aria-labelledby="pill-tab-3"
+        >
+          <div class="text-center">
+            <h3>Time Zone Adjust</h3>
+            <br />
+            <p>
+              <select name="timeZones" id="timeZones" style="width: 25ch">
+                %TIMEZONESELECT%
+              </select>
+            </p>
+            <p>
+              <button class="btn btn-success" onclick="configure('timezone')">
+                Set Time Zone
+              </button>
+            </p>
+          </div>
+        </div>
+        <!-- Logs -->
+        <div
+          class="tab-pane fade"
+          id="logs"
+          role="tabpanel"
+          aria-labelledby="pill-tab-4"
+        >
+          <div class="text-center">
+            <h3>View Logs</h3>
+            <br />
+            <button class="btn btn-success" onclick="configure('showlogs')">
+              Refresh Logs
+            </button>
+            <br /><br />
+            <p
+              style="text-align: left; font-size: medium"
+              id="logFiles"
+              name="logFiles"
+            >
+              %LOGFILE%
+            </p>
+            <p>
+              <button class="btn btn-success" onclick="configure('delLogs')">
+                Delete Logs</button
+              ><br />
+            </p>
+
+            <p id="confirmLogDel">
+              <!-- <input type="checkbox" onclick="configure('doLogDelete')" /> -->
+              <button class="btn btn-danger" onclick="configure('doLogDelete')">
+                Confirm Delete
+              </button>
+              <button class="btn btn-info" onclick="configure('cancelDelete')">
+                Cancel
+              </button>
+            </p>
+          </div>
+        </div>
+        <!-- Sys Info -->
+        <div
+          class="tab-pane fade"
+          id="sysinfo"
+          role="tabpanel"
+          aria-labelledby="pill-tab-4"
+        >
+          <div class="text-center">
+            <h3>System Information</h3>
+            <br />
+            <button
+              class="btn btn-success"
+              onclick="configure('refreshSysinfo')"
+            >
+              Refresh
+            </button>
+            <br /><br />
+            <p
+              style="text-align: left; font-size: medium"
+              id="systemInformation"
+              name="systemInformation"
+            >
+              %SYSINFO%
+            </p>
+            <p>
+              <label for="clock_name">Clock name</label>
+              <input
+                type="text"
+                id="clock_name"
+                name="clock_name"
+                value="%CLOCKNAME%"
+              />
+              <button class="btn btn-info" onclick="configure('setClockName')">
+                Update
+              </button>
+            </p>
+            <button class="btn btn-info" onclick="configure('clearWiFi')">
+              Clear WiFi Credentials
+            </button>
+            <br /><br />
+            <p id="confirmWiFiDel" name="confirmWiFiDel">
+              This will clear your current WiFi setup. The device will restart
+              and you will need to use the "Connections" page to connect.
+              <br /><br />
+              <button
+                class="btn btn-danger"
+                onclick="configure('confirmClearWiFi')"
+              >
+                Confirm Wifi Delete</button
+              >&nbsp;
+              <button
+                class="btn btn-info"
+                onclick="configure('cancelClearWiFi')"
+              >
+                Cancel
+              </button>
+            </p>
+            <br /><br />
+            <p id="confirmErase" name="confirmErase">
+              Erasing WiFi Credentials...<br />
+              Device will now reboot into AP mode.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Schedule Scripts -->
+    <script>
+      function addSched() {
+        let time = document.getElementById("schedTime").value;
+        let color = document.getElementById("color").value;
+        let level = document.getElementById("level").value;
+        // console.log("time:", time);
+        // console.log("color:", color);
+        // console.log("level:", level);
+
+        websocket.send("addSchedule##" + time + "&" + color + "&" + level);
+      }
+      function remSched(btn) {
+        // console.log("SchedID", btn.id);
+        websocket.send("remSchedule##" + btn.id.substr(3));
+      }
+      function format12hr(t) {
+        if (t == "00:00") return "12:00 AM";
+        let hr = Number(t.substr(0, 2));
+        let min = t.substr(3, 2);
+        let meridiem = "AM";
+        if (hr > 12) {
+          hr -= 12;
+          meridiem = "PM";
+        }
+        return String(hr) + ":" + min + meridiem;
+      }
+    </script>
+
+    <!-- Function configure(mode)  -->
+    <script>
+      function configure(mode) {
+        var sStartVars = "";
+        // console.log("mode:", mode);
+        if (mode == "startPrep") {
+          document.getElementById("prepPanel").style.display = "inline";
+          document.getElementById("prepButton").style.display = "none";
+          websocket.send("prepConfig##1");
+        } else if (mode == "startTest") {
+          document.getElementById("startButton").style.display = "none";
+          document.getElementById("stopButton").style.display = "inline";
+          sStartVars =
+            "startConfig##" +
+            document.getElementById("steps_hour").value +
+            "&" +
+            document.getElementById("cycles").value;
+          websocket.send(sStartVars);
+        } else if (mode == "stopTest") {
+          document.getElementById("prepButton").style.display = "inline";
+          document.getElementById("prepPanel").style.display = "none";
+          document.getElementById("stopButton").style.display = "none";
+          document.getElementById("startButton").style.display = "inline";
+          websocket.send("stopConfig##1");
+        } else if (mode == "cw") {
+          websocket.send("cw##1");
+        } else if (mode == "ccw") {
+          websocket.send("ccw##1");
+        } else if (mode == "refreshTime") {
+          websocket.send("refreshTime##1");
+        } else if (mode == "setClock") {
+          sStartVars =
+            "setClock##" + document.getElementById("clockTime").value;
+          websocket.send(sStartVars);
+        } else if (mode == "timezone") {
+          sStartVars =
+            "timezone##'" + document.getElementById("timeZones").value + "'";
+          websocket.send(sStartVars);
+        } else if (mode == "lighting") {
+          var col = document.getElementById("color").value;
+          var lvl = (sStartVars = document.getElementById("level").value);
+          sStartVars = "color##" + col + "&" + lvl;
+          websocket.send(sStartVars);
+        } else if (mode == "showlogs") {
+          websocket.send("showlogs##1");
+        } else if (mode == "delLogs") {
+          document.getElementById("confirmLogDel").style.display = "inline";
+        } else if (mode == "doLogDelete") {
+          document.getElementById("confirmLogDel").style.display = "none";
+          websocket.send("delLogs##1");
+        } else if (mode == "cancelDelete") {
+          document.getElementById("confirmLogDel").style.display = "none";
+        } else if (mode == "refreshSysinfo") {
+          websocket.send("refreshSysinfo##1");
+        } else if (mode == "clearWiFi") {
+          document.getElementById("confirmWiFiDel").style.display = "inline";
+        } else if (mode == "confirmClearWiFi") {
+          document.getElementById("confirmErase").style.display = "inline";
+          websocket.send("clearWiFi##1");
+        } else if (mode == "cancelClearWiFi") {
+          document.getElementById("confirmWiFiDel").style.display = "none";
+        } else if (mode == "setClockName") {
+          websocket.send(
+            "clockName##" + document.getElementById("clock_name").value
+          );
+        }
+        // xhr.send();
+      }
+    </script>
+
+    <!-- WebSocket -->
+    <script>
+      var gateway = `ws://${window.location.hostname}/ws`;
+      var websocket;
+      function initWebSocket() {
+        console.log("Trying to open a WebSocket connection...");
+        websocket = new WebSocket(gateway);
+        websocket.onopen = onOpen;
+        websocket.onclose = onClose;
+        websocket.onmessage = onMessage;
+      }
+      function onOpen(event) {
+        console.log("Connection opened");
+        websocket.send("refreshSysinfo##1");
+        websocket.send("showlogs##1");
+        websocket.send("refreshSchedule##1");
+      }
+      function onClose(event) {
+        console.log("Connection closed");
+        setTimeout(initWebSocket, 2000);
+      }
+      function onMessage(event) {
+        let msg = event.data;
+        let index = msg.indexOf("##");
+        let cmd = msg.substr(0, index);
+        let val = msg.substr(index + 2);
+        // console.log("cmd:", cmd);
+        // console.log("val:", val);
+
+        switch (cmd) {
+          case "localTime":
+            document.getElementById("localTime").innerHTML = val;
+            break;
+          case "clockTime":
+            document.getElementById("clockTime").value = val;
+            break;
+          case "showLogs":
+            document.getElementById("logFiles").innerHTML = val;
+            break;
+          case "configFinished":
+            document.getElementById("startButton").style.display = "inline";
+            document.getElementById("stopButton").style.display = "none";
+            break;
+          case "cycleCount":
+            document.getElementById("cycleCount").innerHTML = "Cycle# " + val;
+            break;
+          case "schedule":
+            // console.log("sched:", val);
+            document.getElementById("schedTable").innerHTML = val;
+            break;
+          case "timezone":
+            consol.log("timezone recvd:", val);
+            document.getElementById("timeZones").value = val;
+            break;
+          case "lighting":
+            let idx = val.indexOf("&");
+            let col = val.substr(0, idx);
+            let lvl = val.substr(idx + 1);
+            // console.log("color recvd:", col);
+            // console.log("level recvd:", lvl);
+            document.getElementById("color").value = col;
+            document.getElementById("brightness").value = lvl;
+            break;
+          case "refreshSysinfo":
+            // document.getElementById("systemInformation").innerHTML = "";
+            document.getElementById("systemInformation").innerHTML = val;
+            break;
+          case "clockName":
+            document.getElementById("clockName").innerHTML = val;
+            break;
+        }
+      }
+      window.addEventListener("load", onLoad);
+      function onLoad(event) {
+        initWebSocket();
+        // initButton();
+      }
+    </script>
+
+    <!-- Bootstrap scripts -->
+    <script
+      src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+      integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz"
+      crossorigin="anonymous"
+    ></script>
+  </body>
+</html>
