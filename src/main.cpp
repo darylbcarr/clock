@@ -12,13 +12,17 @@
 */
 /* Version doc (find out how to use github!)
   3.01 - update oled display with real data
+  3.03 - add code to restart when in AP mode. If power fails and comes back up, the wireless may not be
+    available for a few minutes. So, periodically restart.
+  3.04 - add save minute to come back automatically after power failure
+  3.05 - fix bug make sure g_lastMinute is updated
 */
 #pragma region Includes
 #include <Arduino.h>
 #include <AccelStepper.h>
 #include <time.h>
 #include <WiFi.h>
-#include "ESPDateTime.h"
+// #include "ESPDateTime.h"
 #include <ESPAsyncWebServer.h> // https://github.com/me-no-dev/ESPAsyncWebServer
 #include "SPIFFS.h"
 #include <FastLED.h>
@@ -28,11 +32,12 @@
 
 #pragma region Variables
 int g_ver_major = 3;
-int g_ver_minor = 1;
+int g_ver_minor = 65;
 
 AsyncWebServer server(80); // Create AsyncWebServer object on g_stepperports 80
 AsyncWebSocket ws("/ws");
 bool g_isSTAMode = false; // True if in WiFi station mode
+int g_apTimeoutMin = 5;
 
 // stepper motor control
 // int g_stepperports[4] = {19, 18, 4, 15}; // ports used to control the stepper motor
@@ -46,10 +51,10 @@ int g_steppersequence[8][4] = {
     {HIGH, LOW, LOW, LOW},
     {HIGH, HIGH, LOW, LOW},
     {LOW, HIGH, LOW, LOW}};
-int g_delaytime = 1; // Stepper motor delay between steps
+int g_stepperDelaytime = 1; // Stepper motor delay between steps
 
 const long wifiTimeout = 10000; // WiFi connection attemp limit - 10 seconds
-#define LED 2
+// #define LED 2
 
 #define STEPS_PER_ROTATION 12288 // steps for a full turn of minute ring (1 hour)
 int g_stepsHour;
@@ -107,14 +112,14 @@ bool g_prepConfigStepping = false;  // True if preparing for configuration g_ste
 bool g_startConfigStepping = false; // True if perfoming configuration g_stepTestCycles
 bool g_isSettingClock = false;      // True if setting the clock to real time
 bool g_isRandomColor = false;       // True if random color selected
-int g_clockHour;                    // Keep track of clock hour postion
-int g_clockMinute;                  // Keep track of clock minute position
-String g_clockTime = "";            // The observed clock time
-String g_timezone;                  // Timezone
-String g_ntpPool;                   // NTP pool
-String g_ssid;                      // WiFi network name
-String g_pass;                      // WiFi network passowrd
-String g_lighting;                  // The lighting parameters
+// int g_clockHour;                    // Keep track of clock hour postion
+// int g_clockMinute;                  // Keep track of clock minute position
+String g_clockTime = ""; // What we think is the clock time. Format: HH:MM
+String g_timezone;       // Timezone
+String g_ntpPool;        // NTP pool
+String g_ssid;           // WiFi network name
+String g_pass;           // WiFi network passowrd
+String g_lighting;       // The lighting parameters
 
 // File paths for permanent EEPROM values
 const char *e_ssidPath = "/ssid.txt";
@@ -123,12 +128,13 @@ const char *e_stepsHourPath = "/stephour.txt";
 const char *e_testCyclesPath = "/testcycs.txt";
 const char *e_timezonePath = "/timezone.txt";
 const char *e_ntpPoolPath = "/ntppool.txt";
-const char *e_changeTZPath = "/changetz.txt";
+// const char *e_changeTZPath = "/changetz.txt";
 const char *e_ledColorPath = "/ledcolor.txt";
 const char *e_ledLevelPath = "/ledlevel.txt";
 const char *e_logfilePath = "/logfile.txt";
 const char *e_schedulePath = "/schedule.txt";
 const char *e_clocknmPath = "/clocknm.txt";
+const char *e_clockTimePath = "/clocktm.txt";
 
 #define LED_PIN 4
 #define NUM_LEDS 24
@@ -161,9 +167,13 @@ bool g_randomTimerTriggered = false;
 #define SCREEN_HEIGHT 32 // OLED display height, in pixels
 
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
+#define OLED_SDA 21
+#define OLED_SCL 22
 #define OLED_RESET -1 // Reset pin # (or -1 if sharing Arduino reset pin)
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 #define SSD1306_NO_SPLASH
+
+#define SWITCH_PIN 26
 
 ulong g_steps_plus_completed;
 ulong g_steps_minus_completed;
@@ -171,50 +181,65 @@ ulong g_steps_minus_completed;
 #pragma endregion
 
 #pragma region Function declarations
+#pragma region Date/Time
+String getTime(const char *format);
+int getSecond();
+int getMinute();
+int getHour();
+int getYear();
+void setTimezone(String timezone);
+void setupDateTime(String, String);
+void determineMinuteSteps();
+String formatTime(int, int);
+#pragma endregion
+#pragma region File
+void initSPIFFS();
+String readFile(fs::FS &fs, const char *path);
+String readFile(fs::FS &fs, const char *path, String);
+void writeFile(fs::FS &fs, const char *path, const char *message);
+#pragma endregion
+#pragma region Hardware timers
+void IRAM_ATTR onTimerRandom();
+void IRAM_ATTR onTimerSparkle();
+#pragma endregion
+
 int cmpSched(const void *a, const void *b);
 void deleteSchedule(int idx);
-void determineMinuteSteps();
 String formatSchedule();
 long hstol(String recv);
 String formatLogs(String logs);
-void initSPIFFS();
 void listDir(const char *dir);
 void moveMinute();
-void IRAM_ATTR onTimerRandom();
-void IRAM_ATTR onTimerSparkle();
-void prepRotate();
 String processor(const String &var);
-String readFile(fs::FS &fs, const char *path);
-String readFile(fs::FS &fs, const char *path, String);
 void readLightSchedule();
 void rotate(int step);
-void setupDateTime(String, String);
 void setupLighting();
 bool setupWiFi();
-void showTime();
-void writeFile(fs::FS &fs, const char *path, const char *message);
 void writeLightSchedule();
 void writeLog(String title, String content);
 String formatSysinfo();
 String ledLevelNumber(int lvl);
 void writeLineDisplay(int line, int col, String txt);
-
+String lightBrightnessToLevel(int);
+#pragma region WebSocket
 void handleWebSocketMessage(void *arg, uint8_t *data, size_t len);
 void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
              void *arg, uint8_t *data, size_t len);
 void initWebSocket();
 #pragma endregion
+#pragma endregion
 
 void setup()
 {
   Serial.begin(115200);
-  initSPIFFS();
+  pinMode(SWITCH_PIN, INPUT_PULLUP);
 
 #pragma region Get values from permanent storage
+  initSPIFFS();
   g_timezone = readFile(SPIFFS, e_timezonePath, "CST6CDT,M3.2.0,M11.1.0");
   g_ntpPool = readFile(SPIFFS, e_ntpPoolPath, "us.pool.ntp.org");
 
-  g_stepsHour = readFile(SPIFFS, e_stepsHourPath, "12280").toInt();
+  g_stepsHour = readFile(SPIFFS, e_stepsHourPath, "36870").toInt();
   g_stepTestCycles = readFile(SPIFFS, e_testCyclesPath, "100").toInt();
 
   g_ssid = readFile(SPIFFS, e_ssidPath);
@@ -224,19 +249,16 @@ void setup()
   g_ledLevel = readFile(SPIFFS, e_ledLevelPath, "0").toInt();
 
   g_clockName = readFile(SPIFFS, e_clocknmPath, "Clock Name Here");
-
-  g_clockTime = readFile(SPIFFS, e_changeTZPath);
-  if (g_clockTime != "")
-    SPIFFS.remove(e_changeTZPath);
+  g_clockTime = readFile(SPIFFS, e_clockTimePath, "0");
 
   readLightSchedule();
 
   // listDir("/");
 
 #pragma endregion
-
+#pragma region Setup the OLED display
   // SSD1306_SWITCHCAPVCC = generate display voltage from 3.3V internally
-  Serial.println("Setup Display...");
+  // Serial.println("Setup Display...");
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
   {
     Serial.println(F("SSD1306 allocation failed"));
@@ -248,7 +270,7 @@ void setup()
   display.setTextSize(1.2);           // Normal 1:1 pixel scale
   display.setTextColor(WHITE, BLACK); // Draw white text
   display.cp437(true);                // Use full 256 char 'Code Page 437' font
-
+#pragma endregion
 #pragma region Setup Web services
   if (setupWiFi()) // if the WiFi is available - Setup web server and pages
   {
@@ -262,9 +284,7 @@ void setup()
 
     server.begin();
   }
-
-  // Setup the AP mode to get WiFi credentials
-  else
+  else // Setup the AP mode to get WiFi credentials
   {
     Serial.println("Setting AP (Access Point)");
     // NULL sets an open Access Point
@@ -282,6 +302,9 @@ void setup()
     writeLineDisplay(0, 0, "Connect to network:");
     writeLineDisplay(0, 1, networkName);
     writeLineDisplay(0, 2, "Then: " + IP.toString());
+
+    // Set the timeout tics for the main AP loop. Minutes * seconds * 250ms delay (in main loop)
+    g_apTimeoutMin = g_apTimeoutMin * 60 * 4;
 
     // Setup the home page -------------------------------------------
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
@@ -321,18 +344,16 @@ void setup()
       ESP.restart(); });
     server.begin();
   };
-
 #pragma endregion
-
-  if (g_isSTAMode)
+#pragma region Finish setup if we have successfully connected to WiFi
+  if (g_isSTAMode) // Finish setup if we have successfully connected to WiFi
   {
     String sIP = "IP:" + String(WiFi.localIP().toString());
     writeLineDisplay(0, 0, sIP);
-    // writeLineDisplay(0, 0, "IP: XXX.XXX.XXX.XXX");
     String sLighting = g_ledColor + ", " + ledLevelNumber(g_ledLevel);
     writeLineDisplay(0, 1, g_ledColor + ", " + ledLevelNumber(g_ledLevel));
-    writeLineDisplay(0, 2, DateTime.format("%r"));
-    // display.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, WHITE);
+
+    writeLineDisplay(0, 2, getTime("%H:%M:%S"));
     display.display();
 
 #pragma region Setup Timers
@@ -340,13 +361,11 @@ void setup()
     timerAttachInterrupt(g_SparkleTimer, &onTimerSparkle, true);
     timerAlarmWrite(g_SparkleTimer, 50000, true);
     timerAlarmEnable(g_SparkleTimer);
-    // timerStop(g_SparkleTimer);
 
     g_RandomTimer = timerBegin(1, 80, true);
     timerAttachInterrupt(g_RandomTimer, &onTimerRandom, true);
     timerAlarmWrite(g_RandomTimer, 2000000, true);
     timerAlarmEnable(g_RandomTimer);
-    // timerStop(g_RandomTimer);
 #pragma endregion
 
 #pragma region Setup stepper motor pins
@@ -360,27 +379,18 @@ void setup()
     setupDateTime(g_ntpPool, g_timezone);
     determineMinuteSteps();
 
-    // DateTimeParts p = DateTime.getParts();
-    // Serial.println("--------------------");
-    // Serial.printf("%04d/%02d/%02d %02d:%02d:%02d %ld (%s)\n", p.getYear(),
-    //               p.getMonth(), p.getMonthDay(), p.getHours(), p.getMinutes(),
-    //               p.getSeconds(), p.getTime(), p.getTimeZone());
-    // Serial.println("--------------------");
-
-    g_clockMinute = g_lastMinute = DateTime.getParts().getMinutes();
-    g_clockHour = DateTime.getParts().getHours();
-    if (g_clockHour > 11)
-      g_clockHour -= 12;
-    ws.textAll("timezone##" + g_timezone);
-#pragma endregion
-
-#pragma region If we changed the timezone then use the percieved clock time to move to local time
-    // The g_clockTime (hh:mm) is stored in EEPROM between reboots
-    if (g_clockTime != "")
+    Serial.printf("Startup. Clock time: %s\n", g_clockTime.c_str());
+    if (g_clockTime != "0")
     {
-      Serial.printf("Setting time for timezone change.\n");
-      g_isSettingClock = true;
+      String sRealTime = formatTime(getHour(), getMinute());
+      if (g_clockTime != sRealTime)
+      {
+        Serial.printf("Time mismatch. Real time: %s\n", sRealTime);
+        g_isSettingClock = true;
+      }
     }
+
+    ws.textAll("timezone##" + g_timezone);
 #pragma endregion
 
 #pragma region Setup the clock lighting
@@ -395,11 +405,12 @@ void setup()
 
     writeLog("STARTUP", "&nbsp;");
   }
+#pragma endregion
 }
 
 void loop()
 {
-  if (g_isSTAMode)
+  if (g_isSTAMode) // No loop processed unless we successfully connect to WiFi
   {
 #pragma region Test steps/hour for specified g_stepTestCycles.
     if (g_prepConfigStepping)
@@ -410,23 +421,8 @@ void loop()
         for (int i = 0; i < g_stepTestCycles; i++)
         {
           Serial.printf("   Iteration: %d\r", i + 1);
-          // events.send(String(i + 1).c_str(), "cycleComplete", millis());
           ws.textAll("cycleCount##" + String(i + 1));
 
-          // int cnt = 0;
-          // for (int i = 0; i < 60; i++)
-          // {
-          //   int steps = g_stepsMinute;
-          //   if ((i % 5) == 0)
-          //     steps += g_addStepsFive;
-          //   if (i == 0)
-          //     steps += g_addStepsHour;
-          //   cnt += steps;
-          //   prepRotate();
-          //   rotate(steps);
-          //   // delay(100);
-          // }
-          prepRotate();
           rotate(g_stepsHour);
           // Serial.printf("Steps: %d\n", cnt);
           if (!g_startConfigStepping)
@@ -443,148 +439,67 @@ void loop()
 #pragma region Set the clock
     else if (g_isSettingClock) // Set the clock time starting from observed (clock) time.
     {
-      DateTime.begin();
+      Serial.printf("Setting time from: %s to: %s\n", g_clockTime, formatTime(getHour(), getMinute()));
 
-      String sErr = "";
-      // Bail if the time is not synchronized.
-      if (!DateTime.isTimeValid())
-        sErr = "Error: Web time is not valid.";
-      // If the clock time does not contain a colon character, complain and exit
+      // Parse the clock time string and
+      // Get the clock time total minutes past 12:00
+      // Serial.println("Starting time set...");
       int iColon = g_clockTime.indexOf(':');
-      if (iColon == -1)
-        sErr = "Error: Clock set-time is not valid: " + g_clockTime;
-      if (sErr != "")
+      int g_CurrentClockHour = g_clockTime.substring(0, iColon).toInt();
+      int iClockMin = g_clockTime.substring(iColon + 1).toInt();
+      int iClockTotalMinutes = g_CurrentClockHour * 60 + iClockMin;
+      // Serial.printf("   Clock time: %s, Hour: %d, Minute: %d, Total Mins: %d\n", g_clockTime, g_CurrentClockHour, iClockMin, iClockTotalMinutes);
+
+      // Get the local time total minutes past 12:00
+      int iLocalHour = getHour();
+      int iLocalMin = getMinute();
+      int iLocalTotalMinutes = iLocalHour * 60 + iLocalMin;
+      // Serial.printf("   Real time: Hour: %d, Minute: %d, Total mins: %d\n", iLocalHour, iLocalMin, iLocalTotalMinutes);
+
+      // Use the difference between the two total minutes to determine how many (and which direction) steps to move
+      int iMinutesDifference = iLocalTotalMinutes - iClockTotalMinutes;
+      int iMoveMinutes = iMinutesDifference;
+      if (abs(iMinutesDifference) > 360)
+        iMoveMinutes = (iMinutesDifference > 0) ? iMinutesDifference - 720 : iMinutesDifference + 720;
+      int iMoveSteps = iMoveMinutes * (g_stepsHour / 60);
+      // Serial.printf("   Minute difference: %d, Move minutes: %d, Move steps: %d\n", iMinutesDifference, iMoveMinutes, iMoveSteps);
+
+      // Do the move and compensate for backlash if moving backwards
+      if (iMoveSteps > 0)
       {
-        Serial.println(sErr);
-        g_isSettingClock = false;
+        rotate(iMoveSteps);
       }
       else
       {
-        // Parse the clock time string and
-        // Get the clock time total minutes past 12:00
-        // Serial.println("Starting time set...");
-        int g_CurrentClockHour = g_clockTime.substring(0, iColon).toInt();
-        int iClockMin = g_clockTime.substring(iColon + 1).toInt();
-        int iClockTotalMinutes = g_CurrentClockHour * 60 + iClockMin;
-        // Serial.printf("   Clock time: %s, Hour: %d, Minute: %d, Total Mins: %d\n", g_clockTime, g_CurrentClockHour, iClockMin, iClockTotalMinutes);
-
-        // Get the local time total minutes past 12:00
-        int iLocalHour = DateTime.getParts().getHours();
-        int iLocalMin = DateTime.getParts().getMinutes();
-        int iLocalTotalMinutes = iLocalHour * 60 + iLocalMin;
-        // Serial.printf("   Real time: Hour: %d, Minute: %d, Total mins: %d\n", iLocalHour, iLocalMin, iLocalTotalMinutes);
-
-        // Use the difference between the two total minutes to determine how many (and which direction) steps to move
-        int iMinutesDifference = iLocalTotalMinutes - iClockTotalMinutes;
-        int iMoveMinutes = iMinutesDifference;
-        if (abs(iMinutesDifference) > 360)
-          iMoveMinutes = (iMinutesDifference > 0) ? iMinutesDifference - 720 : iMinutesDifference + 720;
-        int iMoveSteps = iMoveMinutes * (g_stepsHour / 60);
-        // Serial.printf("   Minute difference: %d, Move minutes: %d, Move steps: %d\n", iMinutesDifference, iMoveMinutes, iMoveSteps);
-
-        // Do the move and compensate for backlash if moving backwards
-        prepRotate();
-        if (iMoveSteps > 0)
-        {
-          rotate(iMoveSteps);
-        }
-        else
-        {
-          iMoveSteps -= 200;
-          rotate(iMoveSteps);
-          rotate(200);
-        }
-
-        // Set precise time. See if a minute(s) passed during clock move
-        int iMinNow = DateTime.getParts().getMinutes();
-        int iFixMin = iMinNow - iLocalMin;
-        if (iFixMin != 0)
-        {
-          Serial.printf("   Tweaking time. iLocalMin: %d, iMinNow: %d iFixMin: %d\n", iLocalMin, iMinNow, iFixMin);
-          rotate(iFixMin * (g_stepsHour / 60));
-        }
-
-        String sLocalTime = DateTime.format("%r");
-        // events.send(sLocalTime.c_str(), "setLocalTime", millis());
-        ws.textAll("localTime##" + sLocalTime);
-
-        g_clockHour = DateTime.getParts().getHours();
-        if (g_clockHour > 11)
-          g_clockHour -= 12;
-        g_clockMinute = DateTime.getParts().getMinutes();
-        // Serial.println("Finished set time!");
+        iMoveSteps -= 200;
+        rotate(iMoveSteps);
+        rotate(200);
       }
-      g_isSettingClock = false;
 
-      String sMsg = "Local: " + DateTime.format("%r") + ", Clock: " + g_clockTime;
+      // Set precise time. See if a minute(s) passed during clock move
+      int iMinNow = getMinute();
+      int iFixMin = iMinNow - iLocalMin;
+      if (iFixMin != 0)
+      {
+        Serial.printf("   Tweaking time. iLocalMin: %d, iMinNow: %d iFixMin: %d\n", iLocalMin, iMinNow, iFixMin);
+        rotate(iFixMin * (g_stepsHour / 60));
+      }
+
+      String sMsg = "Local: " + getTime("%r") + ", Clock: " + g_clockTime;
       writeLog("CLOCKSET", sMsg);
+      ws.textAll("localTime##" + getTime("%r"));
+
+      g_clockTime = formatTime(getHour(), getMinute());
+      g_lastMinute = getMinute();
+      writeFile(SPIFFS, e_clockTimePath, g_clockTime.c_str());
+
+      g_isSettingClock = false;
     }
 #pragma endregion
 #pragma region Normal operation
     else
     {
-      // Normal operation
-      //   Move minute hand every minute.
-      int localHour = DateTime.getParts().getHours();
-      int localMinute = DateTime.getParts().getMinutes();
-      int localSecond = DateTime.getParts().getSeconds();
-
-      // If a minute has passed
-      if (localMinute != g_lastMinute)
-      {
-        ws.cleanupClients(); // may need to be handled more often (see ESAsyncWebServer GitHub page)
-
-        writeLineDisplay(0, 2, DateTime.format("%r"));
-        display.display();
-
-        g_lastMinute = localMinute;
-        moveMinute();
-
-        // Set the global clock time string and update the web page with times
-        char clocktm[20];
-        sprintf(clocktm, "%02d:%02d", g_clockHour, g_clockMinute);
-        g_clockTime = clocktm;
-        String sLocalTime = DateTime.format("%r");
-        ws.textAll("localTime##" + sLocalTime);
-        ws.textAll("clockTime##" + g_clockTime);
-        // events.send(sLocalTime.c_str(), "setLocalTime", millis());
-        // events.send(g_clockTime.c_str(), "setClockTime", millis());
-
-        // At 3:00 AM...
-        //    Check for time discrepancies, reset clock if difference.
-        //    This could be processor clock drift or seasonal time change.
-        char localtm[20];
-        sprintf(localtm, "%02d:%02d", localHour, localMinute);
-        if ((localHour == 3) && (localMinute == 0))
-        {
-          // DateTime.forceUpdate();
-          DateTime.begin(); // Get new local time
-          localHour = DateTime.getParts().getHours();
-          localMinute = DateTime.getParts().getMinutes();
-          sprintf(localtm, "%02d:%02d", localHour, localMinute);
-
-          // Move the clock if local time is not equal to the perceived clock time
-          // Should only happen during seasonal time changes
-          if ((localHour != g_clockHour) || (localMinute != g_clockMinute))
-          {
-            char msg[50];
-            sprintf(msg, "Local: %s Clock: %s", localtm, clocktm);
-            writeLog("CLOCKFIX", msg);
-            g_isSettingClock = true;
-          }
-        }
-
-        // Look for lighting schedule trigger
-        for (int i = 0; i < g_scheduleCount; i++)
-        {
-          if (g_schedules[i].sTime == localtm)
-          {
-            g_ledLevel = g_schedules[i].iLevel;
-            g_ledColor = g_schedules[i].sColor;
-            setupLighting();
-          }
-        }
-      }
+      // Normal operation. Move minute hand every minute. Check for color changes.
 
       // Process special colors triggered by timers
       if (g_sparkleTimerTriggered) // Set a random led to a random color
@@ -596,7 +511,6 @@ void loop()
 
         g_sparkleTimerTriggered = false;
       }
-
       else if (g_randomTimerTriggered) // Set all leds to a random color
       {
         long newColor = random(256) + (random(256) << 8) + (random(256) << 16);
@@ -607,12 +521,244 @@ void loop()
         }
         g_randomTimerTriggered = false;
       }
+
+      // If a minute has passed
+      int localMinute = getMinute();
+      if (localMinute != g_lastMinute)
+      {
+        g_lastMinute = localMinute;
+        int localHour = getHour();
+        g_clockTime = formatTime(localHour, localMinute);
+
+        ws.cleanupClients(); // may need to be handled more often (see ESAsyncWebServer GitHub page)
+
+        writeLineDisplay(0, 2, getTime("%r"));                   // Display time on clock LED
+        writeFile(SPIFFS, e_clockTimePath, g_clockTime.c_str()); // Save time to EEPROM
+
+        moveMinute(); // Move the clock one minute forward.
+        // Serial.printf("Minute passed. Clock time: %s\n", g_clockTime.c_str());
+
+        // if ((localHour == 3) && (localMinute == 0) ) // test to trigger every hour
+        // {
+        //   // At 3:00 AM...
+        //   //    Check for time discrepancies, reset clock if difference.
+        //   //    This could be processor clock drift or seasonal time change.
+        //   setupDateTime(g_ntpPool, g_timezone); // Update the time from the Internet
+
+        //   // Move the clock if local time is not equal to the perceived clock time
+        //   // Should only happen during seasonal time changes
+        //   if ((localHour != getHour()) || (localMinute != getMinute()))
+        //   {
+        //     char msg[50];
+        //     sprintf(msg, "Local: %s Clock: %s", formatTime(getHour(), getMinute()), g_clockTime);
+        //     writeLog("CLOCKFIX", msg);
+        //     g_isSettingClock = true;
+        //   }
+        // }
+        // Serial.printf("Time check. Local: %s", getTime("%r"));
+        // setupDateTime(g_ntpPool, g_timezone);
+        // Serial.printf(", Updated: %s\n", getTime("%r"));
+        // Update the web page with times
+        ws.textAll("localTime##" + getTime("%r"));
+        ws.textAll("clockTime##" + g_clockTime);
+
+        // Look for lighting schedule trigger
+        for (int i = 0; i < g_scheduleCount; i++)
+        {
+          // Serial.printf("Check schedule. localtm: %s, time: %s, color: %s\n", localtm, g_schedules[i].sTime, g_schedules[i].sColor);
+          if (g_schedules[i].sTime == g_clockTime)
+          {
+            g_ledLevel = g_schedules[i].iLevel;
+            g_ledColor = g_schedules[i].sColor;
+            writeFile(SPIFFS, e_ledLevelPath, ledLevelNumber(g_ledLevel).c_str());
+            writeFile(SPIFFS, e_ledColorPath, g_ledColor.c_str());
+            g_lighting = "Color: " + g_ledColor + " Level: " + ledLevelNumber(g_ledLevel);
+            writeLineDisplay(0, 1, g_ledColor + ", " + ledLevelNumber(g_ledLevel));
+            writeLog("SETLIGHT", g_lighting);
+
+            setupLighting();
+          }
+        }
+      }
     }
 #pragma endregion
+  }
+  else
+  {
+    // AP mode will timeout after
+    delay(250);
+    g_apTimeoutMin--;
+    if (g_apTimeoutMin < 0)
+    {
+      ESP.restart();
+    }
   }
 }
 
 #pragma region Function definitions
+
+#pragma region Date/Time
+String getTime(const char *format)
+{
+  // Get the the current time in the requested 'format'
+  struct tm timeinfo;
+  char text[64];
+  const char *f = format;
+  if (!f)
+  {
+    f = "%c"; // default to standard date time in locale format
+  }
+  getLocalTime(&timeinfo);
+  size_t txtSize = strftime(text, sizeof(text), f, &timeinfo);
+  if (txtSize == 0)
+  {
+    return "";
+  }
+  return String(text);
+}
+int getSecond()
+{
+  return getTime("%S").toInt();
+}
+int getMinute()
+{
+  return getTime("%M").toInt();
+}
+int getHour()
+{
+  return getTime("%H").toInt();
+}
+int getYear()
+{
+  return getTime("%Y").toInt();
+}
+void setTimezone(String timezone)
+{
+  // Serial.printf("  Setting Timezone to %s\n", timezone.c_str());
+  setenv("TZ", timezone.c_str(), 1); //  Now adjust the TZ.  Clock settings are adjusted to show the new local time
+  tzset();
+}
+void setupDateTime(String ntpPool, String timezone)
+{
+  configTime(0, 0, ntpPool.c_str()); // First connect to NTP server, with 0 TZ offset
+
+  struct tm timeInfo;
+  if (!getLocalTime(&timeInfo))
+  {
+    Serial.println("Failed to get time from server.");
+    // Reboot system
+    ESP.restart();
+  }
+  else
+  {
+    setTimezone(timezone);
+    // Serial.printf("Check internet time: %s\n", getTime("%r"));
+    // Serial.print("Local time is: ");
+    // Serial.println(&timeInfo, "%A, %B %d %Y %H:%M:%S");
+    // Serial.printf("%r format: %s\n", getTime("%r"));
+  }
+}
+void determineMinuteSteps()
+{
+  g_stepsMinute = g_stepsHour / 60;
+
+  // if the steps/hour is not evenly divisible by 60
+  //   then we need to compensate during the hour
+  int remainder = g_stepsHour % 60;
+  g_addStepsFive = (remainder >= 12) ? remainder / 12 : 0;
+  g_addStepsHour = remainder % 12;
+  // Serial.printf("g_stepsHour: %d, g_stepsMinute: %d\n", g_stepsHour, g_stepsMinute);
+  // Serial.printf("g_addStepsFive: %d, g_addStepsHour: %d\n", g_addStepsFive, g_addStepsHour);
+}
+String formatTime(int hr, int min)
+{
+  char clockTime[20];
+  sprintf(clockTime, "%02d:%02d", hr, min);
+  return clockTime;
+}
+#pragma endregion
+#pragma region Hardware timers
+void IRAM_ATTR onTimerSparkle()
+{
+  g_sparkleTimerTriggered = true;
+}
+void IRAM_ATTR onTimerRandom()
+{
+  g_randomTimerTriggered = true;
+}
+#pragma endregion
+#pragma region File
+void initSPIFFS()
+{
+  if (!SPIFFS.begin(true))
+  {
+    Serial.println("An error has occurred while mounting SPIFFS");
+  }
+  Serial.println("SPIFFS mounted successfully");
+}
+String readFile(fs::FS &fs, const char *path, String defValue)
+{
+  // Read File from SPIFFS write defValue if empty
+  // Serial.print("Reading file with default... ");
+
+  String fileContent;
+
+  fileContent = readFile(fs, path);
+
+  if (fileContent == "")
+  {
+    writeFile(SPIFFS, path, defValue.c_str());
+    // Serial.println();
+    return defValue;
+  }
+
+  return fileContent;
+}
+String readFile(fs::FS &fs, const char *path)
+{
+  // Read File from SPIFFS
+  // Serial.printf("reading: %s ", path);
+
+  File file = fs.open(path);
+  if (!file || file.isDirectory())
+  {
+    Serial.printf("Error reading file: %s\n", path);
+    return "";
+  }
+
+  String fileContent;
+  while (file.available())
+  {
+    String sTmp = file.readString();
+    fileContent += sTmp;
+  }
+
+  // Serial.println();
+  return fileContent;
+}
+void writeFile(fs::FS &fs, const char *path, const char *message)
+{
+  // Write file to SPIFFS
+  // Serial.printf("Writing file: %s ", path);
+
+  File file = fs.open(path, FILE_WRITE);
+  if (!file)
+  {
+    Serial.printf("Error writing file: %s\n", path);
+    return;
+  }
+  file.print(message);
+  // {
+  //   Serial.println("- file written");
+  // }
+  // else
+  // {
+  //   Serial.println("- write failed");
+  // }
+  file.close();
+}
+#pragma endregion
+
 int cmpSched(const void *a, const void *b)
 {
   const sched_type *schedA = (const sched_type *)a;
@@ -656,62 +802,6 @@ bool setupWiFi()
   Serial.println(WiFi.localIP());
   return true;
 }
-void setupDateTime(String ntpPool, String sTZ)
-{
-  DateTime.setTimeZone(sTZ.c_str());
-  DateTime.begin();
-
-  if (!DateTime.isTimeValid())
-  {
-    Serial.println("Failed to get time from server.");
-    // Reboot system
-    ESP.restart();
-  }
-  else
-  {
-    Serial.printf("Local time is: %s\n", DateTime.format("%r"));
-  }
-}
-void showTime()
-{
-  Serial.printf("TimeZone:      %s\n", DateTime.getTimeZone());
-  Serial.printf("Up     Time:   %lu seconds\n", millis() / 1000);
-  Serial.printf("Boot   Time:   %ld seconds\n", DateTime.getBootTime());
-  Serial.printf("Cur    Time:   %ld seconds\n",
-                DateTime.getBootTime() + millis() / 1000);
-  Serial.printf("Now    Time:   %ld\n", DateTime.now());
-  Serial.printf("OS     Time:   %ld\n", DateTime.osTime());
-  Serial.printf("NTP    Time:   %ld\n", DateTime.ntpTime(2 * 1000L));
-  // Serial.println();
-  Serial.printf("Local  Time:   %s\n",
-                DateTime.format(DateFormatter::SIMPLE).c_str());
-  Serial.printf("ISO86  Time:   %s\n", DateTime.toISOString().c_str());
-  Serial.printf("UTC    Time:   %s\n",
-                DateTime.formatUTC(DateFormatter::SIMPLE).c_str());
-  Serial.printf("UTC86  Time:   %s\n",
-                DateTime.formatUTC(DateFormatter::ISO8601).c_str());
-
-  Serial.println("===========");
-  time_t t = time(NULL);
-  Serial.printf("OS local:     %s", asctime(localtime(&t)));
-  Serial.printf("OS UTC:       %s", asctime(gmtime(&t)));
-}
-void IRAM_ATTR onTimerSparkle()
-{
-  g_sparkleTimerTriggered = true;
-}
-void IRAM_ATTR onTimerRandom()
-{
-  g_randomTimerTriggered = true;
-}
-void initSPIFFS()
-{
-  if (!SPIFFS.begin(true))
-  {
-    Serial.println("An error has occurred while mounting SPIFFS");
-  }
-  Serial.println("SPIFFS mounted successfully");
-}
 String processor(const String &var)
 {
   // Replaces the text between %match% in spiffs index.html on upload with actual variables
@@ -727,7 +817,7 @@ String processor(const String &var)
   }
   if (var == "LOCALTIME")
   {
-    return DateTime.format("%r").c_str();
+    return getTime("%r").c_str();
   }
   if (var == "SCHEDULEDISPLAYXX")
   {
@@ -784,15 +874,15 @@ String processor(const String &var)
   }
   return String();
 }
-void prepRotate()
-{
-  return;
-  // rotate(-20); // for approach run
-  // rotate(20);  // approach run without heavy load
-}
 void rotate(int iStep)
 {
   // Serial.printf("Entering rotate()...steps: %d\n", step);
+  int iLastSec = 0;
+  if (iStep > 0)
+    g_steps_plus_completed += iStep;
+  else
+    g_steps_minus_completed += iStep;
+
   static int phase = 0;
   int i, j;
   int delta = (iStep > 0) ? 1 : 7;
@@ -805,7 +895,12 @@ void rotate(int iStep)
     {
       digitalWrite(g_stepperports[i], g_steppersequence[phase][i]);
     }
-    delay(g_delaytime);
+    delay(g_stepperDelaytime);
+    // int iSecNow = getSecond();
+    // if(iLastSec != iSecNow){
+    //   Serial.printf("Switch: %d\n", digitalRead(SWITCH_PIN));
+    //   iLastSec = iSecNow;
+    // }
   }
   // power cut
   for (i = 0; i < 4; i++)
@@ -814,40 +909,11 @@ void rotate(int iStep)
   }
   // Serial.println("Exiting rotate()!");
 }
-void determineMinuteSteps()
-{
-  g_stepsMinute = g_stepsHour / 60;
-
-  // if the steps/hour is not evenly divisible by 60
-  //   then we need to compensate during the hour
-  int remainder = g_stepsHour % 60;
-  g_addStepsFive = (remainder >= 12) ? remainder / 12 : 0;
-  g_addStepsHour = remainder % 12;
-  // Serial.printf("g_stepsHour: %d, g_stepsMinute: %d\n", g_stepsHour, g_stepsMinute);
-  // Serial.printf("g_addStepsFive: %d, g_addStepsHour: %d\n", g_addStepsFive, g_addStepsHour);
-}
 void moveMinute()
 {
-  // Update the 'clock' time. Track the clock expected hand positions.
-  g_clockMinute++;
-  if (g_clockMinute == 60)
-  {
-    g_clockMinute = 0;
-    g_clockHour++;
-    if (g_clockHour == 12)
-      g_clockHour = 0;
-  }
-
-  // If this is the start of a new hour...
-  //  Report how many steps taken last hour
-  if (g_clockMinute == 0)
-  {
-    char msg[50];
-    sprintf(msg, "Plus: %d, Minus: %d\0", g_steps_plus_completed, g_steps_minus_completed);
-    writeLog("STEPS_HOUR", msg);
-    g_steps_plus_completed = 0;
-    g_steps_minus_completed = 0;
-  }
+  int localHour = getHour();
+  int localMinute = getMinute();
+  int localSecond = getSecond();
 
   // Determine how many motor steps to take.
   //   The number of steps/revolution may not be evenly divisible by 60.
@@ -855,89 +921,18 @@ void moveMinute()
   //   Any remainder from that will be added at the hour.
   //   See the determinMinuteSteps() function.
   int steps = g_stepsMinute;
-  int iCurrentMinute = DateTime.getParts().getMinutes();
-  // int iCurrentHour = DateTime.getParts().getHours();
-  if ((iCurrentMinute % 5) == 0)
+  // Add 5 minute count offset
+  if ((localMinute % 5) == 0)
   {
     steps += g_addStepsFive;
   }
-
-  // Step to next hour
-  if (iCurrentMinute == 0)
+  // Add hour count offset
+  if (localMinute == 0)
   {
     steps += g_addStepsHour;
   }
 
-  // Maintain the actual steps determined and report each hour (above)
-  if (steps < 0)
-    g_steps_minus_completed += steps;
-  else
-    g_steps_plus_completed += steps;
-
-  prepRotate();
   rotate(steps);
-  // Serial.println("Exiting moveMinute()!");
-}
-String readFile(fs::FS &fs, const char *path, String defValue)
-{
-  // Read File from SPIFFS write defValue if empty
-  Serial.print("Reading file with default... ");
-
-  String fileContent;
-
-  fileContent = readFile(fs, path);
-
-  if (fileContent == "")
-  {
-    writeFile(SPIFFS, path, defValue.c_str());
-    Serial.println();
-    return defValue;
-  }
-
-  return fileContent;
-}
-String readFile(fs::FS &fs, const char *path)
-{
-  // Read File from SPIFFS
-  Serial.printf("reading: %s ", path);
-
-  File file = fs.open(path);
-  if (!file || file.isDirectory())
-  {
-    Serial.println(" - failed to open file for reading.");
-    return "";
-  }
-
-  String fileContent;
-  while (file.available())
-  {
-    String sTmp = file.readString();
-    fileContent += sTmp;
-  }
-
-  Serial.println();
-  return fileContent;
-}
-void writeFile(fs::FS &fs, const char *path, const char *message)
-{
-  // Write file to SPIFFS
-  Serial.printf("Writing file: %s ", path);
-
-  File file = fs.open(path, FILE_WRITE);
-  if (!file)
-  {
-    Serial.println("- failed to open file for writing");
-    return;
-  }
-  if (file.print(message))
-  {
-    Serial.println("- file written");
-  }
-  else
-  {
-    Serial.println("- write failed");
-  }
-  file.close();
 }
 long hstol(String sHex) // Hex string to long
 {
@@ -970,7 +965,7 @@ long coltolong(String sColor) // Color to long value
 }
 void writeLog(String sTitle, String sContent)
 {
-  String sDate = DateTime.format(DateFormatter::SIMPLE);
+  String sDate = getTime("%D %T");
   String sLogEntry = sDate + "#" + sTitle + "#" + sContent;
 
   String sLogs = readFile(SPIFFS, e_logfilePath);
@@ -1038,47 +1033,6 @@ String format12hr(String sTime)
     hr = 12;
   return String(hr) + min + meridiem;
 }
-String formatLevel(int iLevel)
-{
-  switch (iLevel)
-  {
-  case 255:
-    return "10";
-    break;
-  case 200:
-    return "9";
-    break;
-  case 150:
-    return "8";
-    break;
-  case 100:
-    return "7";
-    break;
-  case 80:
-    return "6";
-    break;
-  case 60:
-    return "5";
-    break;
-  case 25:
-    return "4";
-    break;
-  case 8:
-    return "3";
-    break;
-  case 3:
-    return "2";
-    break;
-  case 1:
-    return "1";
-    break;
-  case 0:
-    return "Off";
-    break;
-  default:
-    return "ERR";
-  }
-}
 String formatLogs(String logs)
 {
   // Serial.printf("Logs: %s\n", logs.c_str());
@@ -1132,7 +1086,7 @@ String formatSchedule()
     sched += "<tr>";
     sched += "<td>" + format12hr(g_schedules[i].sTime) + "</td>";
     sched += "<td>" + g_schedules[i].sColor + "</td>";
-    sched += "<td>" + formatLevel(g_schedules[i].iLevel) + "</td>";
+    sched += "<td>" + lightBrightnessToLevel(g_schedules[i].iLevel) + "</td>";
     sched += "<td><button type='button' class='btn btn-outline-danger btn-sm' id='rem" + String(i) + "' onclick='remSched(this)'>Delete</button></td>";
     sched += "</tr>";
   }
@@ -1141,7 +1095,6 @@ String formatSchedule()
 }
 String formatSysinfo()
 {
-  // Get the
   String sTZ = "";
   for (int i = 0; i < 10; i++)
     if (g_selectTimeZones[i][0] == g_timezone)
@@ -1155,7 +1108,7 @@ String formatSysinfo()
     sSMP += "[" + String(g_stepperports[i]) + "] ";
 
   char sClockTime[10] = "";
-  sprintf(sClockTime, "%02d:%02d", g_clockHour, g_clockMinute);
+  sprintf(sClockTime, "%02d:%02d", getHour(), getMinute());
   char sVersion[15];
   sprintf(sVersion, "%02d.%02d", g_ver_major, g_ver_minor);
 
@@ -1166,7 +1119,7 @@ String formatSysinfo()
   sRet += "<tr><td>Version</td><td>" + String(sVersion) + "</td></tr>";
   sRet += "<tr><td>Time zone</td><td>" + sTZ + "</td></tr>";
   sRet += "<tr><td>Clock time</td><td>" + String(sClockTime) + "</td></tr>";
-  sRet += "<tr><td>Local time</td><td>" + DateTime.format("%r") + "</td></tr>";
+  sRet += "<tr><td>Local time</td><td>" + getTime("%r") + "</td></tr>";
   sRet += "<tr><td>WiFi ssid</td><td>" + g_ssid + "</td></tr>";
   sRet += "<tr><td>Current lighting</td><td>" + sLighting + "</td></tr>";
   sRet += "<tr><td>Config steps/hr</td><td>" + String(g_stepsHour) + "</td></tr>";
@@ -1175,11 +1128,12 @@ String formatSysinfo()
   sRet += "<tr><td>Motor steps added every 5 minutes</td><td>" + String(g_addStepsFive) + "</td></tr>";
   sRet += "<tr><td>Motor steps added every hour</td><td>" + String(g_addStepsHour) + "</td></tr>";
   sRet += "<tr><td>Stepper motor pins</td><td>" + sSMP + "</td></tr>";
+  sRet += "<tr><td>Lighting pin</td><td>[" + String(LED_PIN) + "]</td></tr>";
+  sRet += "<tr><td>Display pins</td><td>SDA:[" + String(OLED_SDA) + "] SCL:[" + String(OLED_SCL) + "]</td></tr>";
   sRet += "<tr><td>Chip model</td><td>" + String(ESP.getChipModel()) + "</td></tr>";
   sRet += "<tr><td>Chip revision</td><td>" + String(ESP.getChipRevision()) + "</td></tr>";
   sRet += "<tr><td>Chip cores</td><td>" + String(ESP.getChipCores()) + "</td></tr>";
   sRet += "<tr><td>CPU frequency</td><td>" + String(ESP.getCpuFreqMHz()) + " Mhz</td></tr>";
-  // sRet += "<tr><td>Cycle count</td><td>" + String(ESP.getCycleCount()) + "</td></tr>";
   sRet += "<tr><td>Heap size</td><td>" + String(ESP.getHeapSize()) + "</td></tr>";
   sRet += "<tr><td>Heap free</td><td>" + String(ESP.getFreeHeap()) + "</td></tr>";
   sRet += "<tr><td>Min free heap</td><td>" + String(ESP.getMinFreeHeap()) + "</td></tr>";
@@ -1187,11 +1141,11 @@ String formatSysinfo()
   sRet += "<tr><td>SDK version</td><td>" + String(ESP.getSdkVersion()) + "</td></tr>";
   sRet += "<tr><td>Flash chip size</td><td>" + String(ESP.getFlashChipSize()) + "</td></tr>";
   sRet += "<tr><td>Sketch size</td><td>" + String(ESP.getSketchSize()) + "</td></tr>";
-  // sRet += "<tr><td>Sketch MD5</td><td>" + String(ESP.getSketchMD5()) + "</td></tr>";
   sRet += "<tr><td>Sketch free</td><td>" + String(ESP.getFreeSketchSpace()) + "</td></tr>";
   sRet += "</table>";
   return sRet;
 }
+#pragma region
 void deleteSchedule(int iIdx)
 {
   for (int i = 0; i < g_scheduleCount; i++)
@@ -1251,6 +1205,7 @@ void readLightSchedule()
 
   g_scheduleCount = iCount;
 }
+#pragma endregion
 void listDir(const char *sDir)
 {
   File root = SPIFFS.open(sDir);
@@ -1286,8 +1241,50 @@ void writeLineDisplay(int col, int line, String txt)
     display.print(" ");
   display.display();
 }
-
-// Web socket functions
+#pragma region Utils
+String lightBrightnessToLevel(int iLevel)
+{
+  switch (iLevel)
+  {
+  case 255:
+    return "10";
+    break;
+  case 200:
+    return "9";
+    break;
+  case 150:
+    return "8";
+    break;
+  case 100:
+    return "7";
+    break;
+  case 80:
+    return "6";
+    break;
+  case 60:
+    return "5";
+    break;
+  case 25:
+    return "4";
+    break;
+  case 8:
+    return "3";
+    break;
+  case 3:
+    return "2";
+    break;
+  case 1:
+    return "1";
+    break;
+  case 0:
+    return "Off";
+    break;
+  default:
+    return "ERR";
+  }
+}
+#pragma endregion
+#pragma region Web socket
 void notifyClients()
 {
   // ws.textAll(String(ledState));
@@ -1308,7 +1305,7 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
     // Serial.printf("cmd: %s, val: %s\n", cmd.c_str(), val.c_str());
     if (cmd == "refreshTime") // Refresh the local time display
     {
-      String sTemp = DateTime.format("%r");
+      String sTemp = getTime("%r");
       ws.textAll("localTime##" + sTemp);
     }
     else if (cmd == "prepConfig")
@@ -1343,7 +1340,6 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
     {
       g_clockTime = val;
       g_isSettingClock = true;
-      Serial.printf("Setting time to: %s\n", g_clockTime);
     }
     else if (cmd == "timezone")
     {
@@ -1354,17 +1350,18 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
       writeLog("TIMEZONE", "From:" + g_timezone + " To:" + val);
       g_timezone = val;
       writeFile(SPIFFS, e_timezonePath, g_timezone.c_str());
-      g_clockTime = String(g_clockHour) + ":" + String(g_clockMinute);
-      writeFile(SPIFFS, e_changeTZPath, g_clockTime.c_str());
+      g_clockTime = String(getHour()) + ":" + String(getMinute());
+      // writeFile(SPIFFS, e_changeTZPath, g_clockTime.c_str());
+      setupDateTime(g_ntpPool, g_timezone);
+      g_isSettingClock = true;
 
       // Wait until next minute to give full minute for reboot
-      while (DateTime.getParts().getSeconds() != 0)
-      {
-      }
-      moveMinute();
-      delay(5000); // Let async complete
-
-      ESP.restart();
+      // while (getSecond != 0)
+      // {
+      // }
+      // moveMinute();
+      // delay(5000); // Let async complete
+      // ESP.restart();
     }
     else if (cmd == "color")
     {
@@ -1489,7 +1486,7 @@ void initWebSocket()
   ws.onEvent(onEvent);
   server.addHandler(&ws);
 }
-
+#pragma endregion
 #pragma endregion
 
 // Half step example
