@@ -259,6 +259,18 @@
                 </button>
               </p>
             </div>
+            <br /><br />
+            <label for="revMotor">Press if motor is turning backwards</label>
+            <button
+              class="btn btn-info btn-sm"
+              id="revMotor"
+              name="revMotor"
+              onclick="configure('revMotor')"
+            >
+              Reverse
+            </button>
+            <p id="motorPins" name="motorPins">%MOTORPINS%</p>
+
             <br />
           </div>
         </div>
@@ -483,6 +495,8 @@
           websocket.send(
             "clockName##" + document.getElementById("clock_name").value
           );
+        } else if (mode == "revMotor") {
+          websocket.send("revMotor##1");
         }
         // xhr.send();
       }
@@ -549,7 +563,7 @@
             // console.log("color recvd:", col);
             // console.log("level recvd:", lvl);
             document.getElementById("color").value = col;
-            document.getElementById("brightness").value = lvl;
+            document.getElementById("level").value = lvl;
             break;
           case "refreshSysinfo":
             // document.getElementById("systemInformation").innerHTML = "";
@@ -557,6 +571,9 @@
             break;
           case "clockName":
             document.getElementById("clockName").innerHTML = val;
+            break;
+          case "motorPins":
+            document.getElementById("motorPins").innerHTML = val;
             break;
         }
       }

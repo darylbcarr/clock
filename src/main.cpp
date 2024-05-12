@@ -1,4 +1,6 @@
 /*   TODO
+. Web option to change motor direction
+. online updates?
 . XX-Web button to clear WiFi credentials
 . XX-Add first time startup (AP mode)
 . XX-Add table for logs
@@ -11,11 +13,20 @@
 . XX-Web button to clear logs
 */
 /* Version doc (find out how to use github!)
-  3.01 - update oled display with real data
-  3.03 - add code to restart when in AP mode. If power fails and comes back up, the wireless may not be
+  3.1 - update oled display with real data
+  3.3 - add code to restart when in AP mode. If power fails and comes back up, the wireless may not be
     available for a few minutes. So, periodically restart.
-  3.04 - add save minute to come back automatically after power failure
-  3.05 - fix bug make sure g_lastMinute is updated
+  3.4 - add save minute to come back automatically after power failure
+  3.5 - fix bug make sure g_lastMinute is updated in Set-the-clock
+  3.6 - set the AP timeout from 5 to 15 minutes.
+  3.65 - set g_lastMinute in time startup.
+  3.66 - do a internet time setup at 3:00 AM
+  3.67 - fix update lighting status on webpage
+  3.68 - added display of failed ssid and pw to OLED (10 seconds)
+  3.70 - added motor reverse selction in Steps/Hour
+  3.71 - added storage of motor pin setup
+  3.72 - test seasonal time change compensation (every hour)
+  3.73 - put back 3:00 AM seasonal time check
 */
 #pragma region Includes
 #include <Arduino.h>
@@ -32,16 +43,17 @@
 
 #pragma region Variables
 int g_ver_major = 3;
-int g_ver_minor = 65;
+int g_ver_minor = 73;
 
 AsyncWebServer server(80); // Create AsyncWebServer object on g_stepperports 80
 AsyncWebSocket ws("/ws");
 bool g_isSTAMode = false; // True if in WiFi station mode
-int g_apTimeoutMin = 5;
+int g_apTimeoutMin = 15;
 
 // stepper motor control
-// int g_stepperports[4] = {19, 18, 4, 15}; // ports used to control the stepper motor
-int g_stepperports[4] = {18, 19, 23, 33}; // ports used to control the stepper motor
+int g_motorports1[] = {18, 19, 23, 33};
+int g_motorports2[] = {33, 23, 19, 18};
+int *g_stepperports = g_motorports1; // ports used to control the stepper motor
 int g_steppersequence[8][4] = {
     {LOW, HIGH, HIGH, LOW},
     {LOW, LOW, HIGH, LOW},
@@ -135,6 +147,7 @@ const char *e_logfilePath = "/logfile.txt";
 const char *e_schedulePath = "/schedule.txt";
 const char *e_clocknmPath = "/clocknm.txt";
 const char *e_clockTimePath = "/clocktm.txt";
+const char *e_motorPins = "/motorpin.txt";
 
 #define LED_PIN 4
 #define NUM_LEDS 24
@@ -218,6 +231,7 @@ bool setupWiFi();
 void writeLightSchedule();
 void writeLog(String title, String content);
 String formatSysinfo();
+String formatMotorPins();
 String ledLevelNumber(int lvl);
 void writeLineDisplay(int line, int col, String txt);
 String lightBrightnessToLevel(int);
@@ -250,6 +264,9 @@ void setup()
 
   g_clockName = readFile(SPIFFS, e_clocknmPath, "Clock Name Here");
   g_clockTime = readFile(SPIFFS, e_clockTimePath, "0");
+
+  String sMotorPins = readFile(SPIFFS, e_motorPins, "Normal");
+  g_stepperports = (sMotorPins == "Normal") ? g_motorports1 : g_motorports2;
 
   readLightSchedule();
 
@@ -373,6 +390,7 @@ void setup()
     pinMode(g_stepperports[1], OUTPUT);
     pinMode(g_stepperports[2], OUTPUT);
     pinMode(g_stepperports[3], OUTPUT);
+    ws.textAll("motorPins##Stepper motor pins: " + formatMotorPins());
 #pragma endregion
 
 #pragma region Setup Date/Time
@@ -383,6 +401,7 @@ void setup()
     if (g_clockTime != "0")
     {
       String sRealTime = formatTime(getHour(), getMinute());
+      g_lastMinute = getMinute();
       if (g_clockTime != sRealTime)
       {
         Serial.printf("Time mismatch. Real time: %s\n", sRealTime);
@@ -391,6 +410,7 @@ void setup()
     }
 
     ws.textAll("timezone##" + g_timezone);
+    writeLineDisplay(0, 2, getTime("%H:%M:%S"));
 #pragma endregion
 
 #pragma region Setup the clock lighting
@@ -400,7 +420,7 @@ void setup()
 
     setupLighting();
 
-    ws.textAll("lighting##" + g_ledColor + "&" + ledLevelNumber(g_ledLevel));
+    // ws.textAll("lighting##" + g_ledColor + "&" + ledLevelNumber(g_ledLevel));
 #pragma endregion
 
     writeLog("STARTUP", "&nbsp;");
@@ -524,10 +544,10 @@ void loop()
 
       // If a minute has passed
       int localMinute = getMinute();
+      int localHour = getHour();
       if (localMinute != g_lastMinute)
       {
         g_lastMinute = localMinute;
-        int localHour = getHour();
         g_clockTime = formatTime(localHour, localMinute);
 
         ws.cleanupClients(); // may need to be handled more often (see ESAsyncWebServer GitHub page)
@@ -538,23 +558,23 @@ void loop()
         moveMinute(); // Move the clock one minute forward.
         // Serial.printf("Minute passed. Clock time: %s\n", g_clockTime.c_str());
 
-        // if ((localHour == 3) && (localMinute == 0) ) // test to trigger every hour
-        // {
-        //   // At 3:00 AM...
-        //   //    Check for time discrepancies, reset clock if difference.
-        //   //    This could be processor clock drift or seasonal time change.
-        //   setupDateTime(g_ntpPool, g_timezone); // Update the time from the Internet
+        if ((localHour == 3) && (localMinute == 0)) // test to trigger every hour
+        {
+          // At 3:00 AM...
+          //    Check for time discrepancies, reset clock if difference.
+          //    This could be processor clock drift or seasonal time change.
+          setupDateTime(g_ntpPool, g_timezone); // Update the time from the Internet
 
-        //   // Move the clock if local time is not equal to the perceived clock time
-        //   // Should only happen during seasonal time changes
-        //   if ((localHour != getHour()) || (localMinute != getMinute()))
-        //   {
-        //     char msg[50];
-        //     sprintf(msg, "Local: %s Clock: %s", formatTime(getHour(), getMinute()), g_clockTime);
-        //     writeLog("CLOCKFIX", msg);
-        //     g_isSettingClock = true;
-        //   }
-        // }
+          // Move the clock if local time is not equal to the perceived clock time
+          // Should only happen during seasonal time changes
+          if ((localHour != getHour()) || (localMinute != getMinute()))
+          {
+            char msg[50];
+            sprintf(msg, "Local: %s Clock: %s", formatTime(getHour(), getMinute()), g_clockTime);
+            writeLog("CLOCKFIX", msg);
+            g_isSettingClock = true;
+          }
+        }
         // Serial.printf("Time check. Local: %s", getTime("%r"));
         // setupDateTime(g_ntpPool, g_timezone);
         // Serial.printf(", Updated: %s\n", getTime("%r"));
@@ -796,6 +816,10 @@ bool setupWiFi()
     if (currentTick - previousTick >= wifiTimeout)
     {
       Serial.println("WiFi failed to connect");
+      writeLineDisplay(0, 0, "Connect failed:");
+      writeLineDisplay(0, 1, "SSID: " + g_ssid);
+      writeLineDisplay(0, 2, "PW: " + g_pass);
+      delay(10000);
       return false;
     }
   }
@@ -871,6 +895,10 @@ String processor(const String &var)
   if (var == "CLOCKNAME")
   {
     return readFile(SPIFFS, e_clocknmPath);
+  }
+  if (var == "MOTORPINS")
+  {
+    return "Stepper motor pins: " + formatMotorPins();
   }
   return String();
 }
@@ -1015,6 +1043,7 @@ void setupLighting()
         FastLED.show();
       }
     }
+    ws.textAll("lighting##" + g_ledColor + "&" + String(g_ledLevel));
   }
 }
 String format12hr(String sTime)
@@ -1103,10 +1132,6 @@ String formatSysinfo()
       break;
     }
 
-  String sSMP = "";
-  for (int i = 0; i < 4; i++)
-    sSMP += "[" + String(g_stepperports[i]) + "] ";
-
   char sClockTime[10] = "";
   sprintf(sClockTime, "%02d:%02d", getHour(), getMinute());
   char sVersion[15];
@@ -1127,7 +1152,7 @@ String formatSysinfo()
   sRet += "<tr><td>Motor steps/minute</td><td>" + String(g_stepsMinute) + "</td></tr>";
   sRet += "<tr><td>Motor steps added every 5 minutes</td><td>" + String(g_addStepsFive) + "</td></tr>";
   sRet += "<tr><td>Motor steps added every hour</td><td>" + String(g_addStepsHour) + "</td></tr>";
-  sRet += "<tr><td>Stepper motor pins</td><td>" + sSMP + "</td></tr>";
+  sRet += "<tr><td>Stepper motor pins</td><td>" + formatMotorPins() + "</td></tr>";
   sRet += "<tr><td>Lighting pin</td><td>[" + String(LED_PIN) + "]</td></tr>";
   sRet += "<tr><td>Display pins</td><td>SDA:[" + String(OLED_SDA) + "] SCL:[" + String(OLED_SCL) + "]</td></tr>";
   sRet += "<tr><td>Chip model</td><td>" + String(ESP.getChipModel()) + "</td></tr>";
@@ -1145,7 +1170,13 @@ String formatSysinfo()
   sRet += "</table>";
   return sRet;
 }
-#pragma region
+String formatMotorPins()
+{
+  String sRet = "";
+  for (int i = 0; i < 4; i++)
+    sRet += "[" + String(g_stepperports[i]) + "] ";
+  return sRet;
+}
 void deleteSchedule(int iIdx)
 {
   for (int i = 0; i < g_scheduleCount; i++)
@@ -1205,7 +1236,6 @@ void readLightSchedule()
 
   g_scheduleCount = iCount;
 }
-#pragma endregion
 void listDir(const char *sDir)
 {
   File root = SPIFFS.open(sDir);
@@ -1459,6 +1489,21 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len)
     {
       writeFile(SPIFFS, e_clocknmPath, val.c_str());
       ws.textAll("clockName##" + val);
+    }
+    else if (cmd == "revMotor")
+    {
+      // g_stepperports[4] = {18, 19, 23, 33}; /
+      if (g_stepperports[0] == 18)
+      {
+        g_stepperports = g_motorports2;
+        writeFile(SPIFFS, e_motorPins, "Reverse");
+      }
+      else
+      {
+        g_stepperports = g_motorports1;
+        writeFile(SPIFFS, e_motorPins, "Normal");
+      }
+      ws.textAll("motorPins##Stepper motor pins: " + formatMotorPins());
     }
   }
 }
